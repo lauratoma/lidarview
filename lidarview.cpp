@@ -60,10 +60,13 @@ float minx, maxx, miny, maxy, minz, maxz;
 
 const int WINDOWSIZE = 500; 
 
-//whenever the user rotates and translates the scene, we update these
-//global translation and rotation
+
+//pos[] and theta[] represent the translation and rotation on x,y and
+//z axes, respectively. They represent how the user wants to look at
+//the terrain. The user can change them through keypresses
 GLfloat pos[3] = {0,0,0};
 GLfloat theta[3] = {0,0,0};
+
 
 // draw polygons line or filled. This will be used when rendering the
 // surface.
@@ -196,6 +199,16 @@ GLfloat Wheat[3] = { 0.847059 , 0.847059, 0.74902};
 
 
 
+//the length (maxx-minx), width (maxy-miny) and height (maxz-minz)  of the dataset 
+double dim_x, dim_y, dim_z; 
+
+//scale is used to map the points to [-1,1] x [-1, 1] x [-1, 1]. Scale
+//is the same on all dimensions. It is initialized after reading
+//points from file to either 1/dim_x or 1/dim_y, whichever is
+//smallest.
+double scale = 1; 
+//the heights can be vertically exagerated. Controlled by keypress >, <
+double  Z_EXAGERRATION  = 1; 
 
 
 /* forward declarations of functions */
@@ -263,6 +276,14 @@ void readPointsFromFile(char* fname) {
   //print info 
   printf("total %d points in  [%f, %f], [%f,%f], [%f,%f]\n", 
 	 (int)points.size(), minx, maxx, miny,maxy, minz, maxz); 
+
+ //set the scale 
+  dim_x = maxx - minx; 
+  dim_y = maxy - miny; 
+  dim_z = maxz - minz; 
+  scale = (dim_x > dim_y) ? 1.0/dim_x: 1.0/dim_y; 
+  printf("dim_x = %.1f, dim_y = %.1f, dim_z=%.1f, scale=%f\n", dim_x, dim_y, dim_z, scale); 
+  
 }
 
 
@@ -277,7 +298,7 @@ int main(int argc, char** argv) {
   //this allocates and initializes the array that holds the points
   readPointsFromFile(argv[1]); 
 
-
+ 
   /* OPEN GL STUFF */
   /* open a window and initialize GLUT stuff */
   glutInit(&argc, argv);
@@ -293,20 +314,26 @@ int main(int argc, char** argv) {
   /* OpenGL init */
   /* set background color black*/
   glClearColor(0, 0, 0, 0);  
-  glEnable(GL_DEPTH_TEST); 
+  glEnable(GL_DEPTH_TEST); //enable OpenGL hidden surface removal
 
   /* setup the camera (i.e. the projection transformation) */ 
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
-  gluPerspective(60, 1 /* aspect */, 1, 10.0); /* the frustrum is from z=-1 to z=-10 */
-  /* camera is at (0,0,0) looking along negative z axis */
+  gluPerspective(60, 1 /* aspect */, 1, 100.0); 
+  /* the frustrum is from z=-1 to z=-100; camera is at (0,0,0) looking
+     down the negative Z-axis */
   
-  //initialize the translation to bring the points in the view frustrum which is [-1, -10]
-  pos[2] = -2;
+  //ortho instead? 
+  //the view frustrum is z=[0, -10]
+  // glOrtho(-1, 1, -1, 1, 0,-10); //left, right, top, bottom, near, far
+  //LT: can;t get this work 
 
-  //initialize rotation to look at it from above 
-  theta[0] = -45; 
-
+  //set initial view: bring all z-values (which are in [-1, 1] down by
+  //3 to bring them in the view frustrum of [-1, -100].
+  pos[0] = pos[1] = 0; pos[2] = -3; 
+  
+  //initialize rotation to see terrain tilted, rather than top-down
+  theta[0] = -45; theta[1] = theta[2] = 0; 
   
   /* start the event handler */
   glutMainLoop();
@@ -327,22 +354,23 @@ void display(void) {
   glMatrixMode(GL_MODELVIEW); 
   glLoadIdentity();
 
-  /* The default GL window is x=[-1,1], y= [-1,1] with the origin in
-     the center.  The view frustrum was set up from z=-1 to z=-10. The
-     camera is at (0,0,0) looking along negative z axis.
+  /* The default GL window is x=[-1,1], y= [-1,1], z=[-1, 1] with the
+     origin in the center.  The view frustrum was set up from z=-1 to
+     z=-100. The camera is at (0,0,0) looking down negative z-axis.
   */ 
 
- /* First we translate and rotate our local reference system with the
-    user transformation. pos[] represents the cumulative translation
-    entered by the user, and theta[] the cumulative rotation entered
-    by the user */
+  /* First we translate and rotate our local reference system with the
+     user transformation, which represents how the user wants to look
+     at the terrain. pos[] represents the cumulative translation and
+     theta[] the cumulative rotation entered by the user through
+     keypresses */
   glTranslatef(pos[0], pos[1], pos[2]);  
-  glRotatef(theta[0], 1,0,0); //rotate theta[0] around x-axis, etc 
-  glRotatef(theta[1], 0,1,0);
-  glRotatef(theta[2], 0,0,1);
+  glRotatef(theta[0], 1,0,0); //rotate theta[0] around x-axis
+  glRotatef(theta[1], 0,1,0);//rotate theta[1] around y-axis
+  glRotatef(theta[2], 0,0,1);//rotate theta[2] around z-axis
   
-  /* We translated the local reference system where we want it to be; now we draw the
-     object in the local reference system.  */
+  /* We translated the local reference system where we want it to be;
+     now we draw the object in the local reference system.  */
   draw_points();  
     
   //don't need to draw a cube but I found it nice for perspective 
@@ -361,26 +389,30 @@ void keypress(unsigned char key, int x, int y) {
   case '2': 
     //3d orthogonal projection, view from straight above
     glMatrixMode(GL_PROJECTION);
-    //the view frustrum is z=[0, -20]
-    glOrtho(-1, 1, -1, 1, 0,-20); //left, right, top, bottom, near, far
+    //glLoadIdentity();
+    //the view frustrum is z=[0, -10]
+    glOrtho(-1, 1, -1, 1, 0,-10); //left, right, top, bottom, near, far
     
-    //initial view is from (0,0,-5) ie above the terrain looking straight down
-    pos[0]=pos[1]=0; pos[2] = -7; 
-    //initial view: no rotation
-    theta[0]=theta[1] = theta[2]= 0; 
+    //set initial view: bring all z-values (which are in [-1, 1] down
+    //by 5 to bring them in the view frustrum of [0, -10].
+    pos[0] = pos[1] = 0; pos[2] = -5; 
+    //use default view, look straight down the negative z-axis.
+    theta[0] = theta[1] = theta[2] = 0; 
     glutPostRedisplay();
     break;
   
   case '3': 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    gluPerspective(60, 1 /* aspect */, 1, 10.0); /* the frustrum is from z=-1 to z=-10 */
+    gluPerspective(60, 1 /* aspect */, 1, 100.0); /* the frustrum is from z=-1 to z=-100 */
     /* camera is at (0,0,0) looking along negative z axis */
-    //initialize the translation; view frustrum is z= [-1, -10] and
-    //initial position (0,0,-2)
-    pos[0]=pos[1]=0; pos[2] = -2;
-    //initialize rotation to look  from above 
-    theta[1] = theta[2] = 0;  theta[0] = -45; 
+    
+    //set initial view: brings all z-values (which are in [-1, 1])
+    //down by 3 to bring them in the view frustrum of [-1, -100]
+    pos[0]=pos[1]=0; pos[2] = -3;
+    //by default we look at the terrain from (0,0,0) down the negative
+    //z-axis. rotate around x to get a tilted view.
+   theta[0] = -45;   theta[1] = theta[2] = 0;  
     glutPostRedisplay();
     break;
 
@@ -477,15 +509,16 @@ void keypress(unsigned char key, int x, int y) {
     break;
     
     //TRANSLATIONS 
-    //backward (zoom out)
+    //backward, move away from terrain 
   case 'b':
-    pos[2] -= 0.1; 
+    pos[2] -= 0.1;
+    //glTranslatef(0,0, -0.1);
     glutPostRedisplay();
     break;
-    //forward (zoom in)
+    //forward, move towards terrain 
   case 'f':
     pos[2] += 0.1; 
-    //glTranslatef(0,0, 0.5);
+    //glTranslatef(0,0, 0.1);
     glutPostRedisplay();
     break;
     //down 
@@ -511,12 +544,32 @@ void keypress(unsigned char key, int x, int y) {
     glutPostRedisplay();
     break;
 
-    //fillmode 
-  case 'w': 
-    fillmode = !fillmode; 
+  case '+': //zoom in 
+    scale *= 1.1; 
+    glutPostRedisplay();
+    break;
+  case '-': //zoom in 
+    scale /= 1.1; 
+    glutPostRedisplay();
+    break;
+    
+  case '>': 
+    Z_EXAGERRATION *= 1.5; 
      glutPostRedisplay();
     break;
 
+  case '<': 
+    Z_EXAGERRATION /= 1.5; 
+    glutPostRedisplay();
+    break;
+
+    
+    //fillmode 
+  case 'w': 
+    fillmode = !fillmode; 
+    glutPostRedisplay();
+    break;
+    
   case 'q':
     exit(0);
     break;
@@ -530,22 +583,38 @@ void keypress(unsigned char key, int x, int y) {
 
 
 
-
 /* x is a value in [minx, maxx]; it is mapped to [-1,1] */
 GLfloat xtoscreen(GLfloat x) {
-  //return (-1 + 2*x/WINDOWSIZE); 
-  return (-1 + 2*(x-minx)/(maxx-minx)); 
+  //map x to [-1, 1]
+  //return (-1 + 2*(x-minx)/(maxx-minx)); 
+
+  //map x keeping the aspect ratio of the dataset
+  double diff = 2 * (1.0 - dim_x*scale); 
+  double xnew =  -1 + diff/2 +  2*(x - minx)* scale; 
+  // printf("x=%.1f\n", xnew); 
+  return xnew;
 }
 
 
 /* y is a value in [miny, maxy]; it is mapped to [-1,1] */
 GLfloat ytoscreen(GLfloat y) {
-  return (-1 + 2*(y-miny)/(maxy-miny)); 
+  //map y to [-1, 1]
+  //return (-1 + 2*(y-miny)/(maxy-miny)); 
+  
+  //map y keeping the aspect ratio of the dataset
+  double diff = 2 * (1.0 - dim_y*scale); 
+  double ynew =  -1 + diff/2 +  2*(y - miny)* scale; 
+  //printf("y=%.1f\n", ynew); 
+  return ynew;
 }
 
-/* z is a value in [minz, maxz]; it is mapped so that [0, maxz] map to [0,1] */
+/* z is a value in [minz, maxz]; it is mapped so that [minz, maxz] map to [0,1] */
 GLfloat ztoscreen(GLfloat z) {
-    return (-1 + 2*(z-minz)/(maxz-minz))/1.5; 
+  //map z to [0, 1] 
+  // return ((z-minz)/(maxz-minz)); 
+
+  //map at the same scale as on xy
+  return (z-minz)* scale * Z_EXAGERRATION; 
 }
 
 
@@ -664,7 +733,6 @@ void setColor(lidarPoint p) {
 void draw_points(){
   
 
-  //else, NOCOLOR must be 0, so we render with color based on codes 
   glBegin(GL_POINTS); 
   int i;
   lidarPoint p; 
