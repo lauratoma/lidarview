@@ -1,20 +1,14 @@
 PLATFORM = $(shell uname)
 
-
-## Compilation flags
-##comment out one or the other 
-##debugging 
-CFLAGS = -g 
-##release
-#CFLAGS = -O3 -DNDEBUG
+CFLAGS = -g  -Wall 
 LDFLAGS=
 
-CFLAGS+= -Wall
 
 ifeq ($(PLATFORM),Darwin)
 ## Mac OS X
 CFLAGS += -m64 -isystem/usr/local/include  -Wno-deprecated 
 LDFLAGS+= -m64 -lc -framework AGL -framework OpenGL -framework GLUT -framework Foundation
+
 else
 ## Linux
 CFLAGS += -m64
@@ -31,11 +25,15 @@ PROGS = lidarview
 
 default: $(PROGS)
 
-lidarview: lidarview.o 
-	$(CC) -o $@ lidarview.o $(LDFLAGS)
+lidarview: lidarview.o  lidar.o 
+	$(CC) -o $@ lidarview.o  lidar.o $(LDFLAGS)
 
-lidarview.o: lidarview.cpp  
+lidarview.o: lidarview.cpp lidar.hpp  
 	$(CC) -c $(INCLUDEPATH) $(CFLAGS)   lidarview.cpp  -o $@
+
+lidar.o: lidar.cpp lidar.hpp   
+	$(CC) -c $(INCLUDEPATH) $(CFLAGS)   lidar.cpp  -o $@
+
 
 clean::	
 	rm *.o

@@ -5,12 +5,13 @@
    returns; has options to filter by classification codes (ground,
    building, vegetation and other).
 
-   The lidar file is obtained from a .las or .laz file with
-   LAStools:las2txt; 
+   The lidar file is obtained from a .las or .laz file with 'pdal
+   translate'
    
-   last2txt -o file.las -o file.txt -parse xyznrc
+   NOte: using LAStools:las2txt `last2txt -o file.las -o file.txt
+   -parse xyznrc` gives different format and will need some
+   adjustments
 
-   NOTE: -parse xyznrc in this order
 
    keypress: 
 
@@ -18,52 +19,39 @@
    w: toggle wire/filled polygons
    v,g,h,o: toggle veg, ground, buildings,other on/off
    c: cycle through colormaps (one color, based on code, based on your code)
-   t: cycle through filter  options: first-return, lsat return, many-returns, all-returns
+   t: cycle through filter  options: first-return, last return, many-returns, all-returns
 
    OpenGL 1.x
    Laura Toma
 */
 
+#include "lidar.hpp"
+
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 #include <assert.h>
-//this allows this code to compile both on apple and linux platforms
-#ifdef __APPLE__
-#include <GLUT/glut.h>
-#else
-#include <GL/glut.h>
-#endif
-#include <vector>
 
+#include <GLUT/glut.h>
+
+#include <vector>
 using namespace std; 
 
 
+//the lidar points. note: this needs to be global because it needs to
+//be rendered
+lidar_point_cloud lpoints;
 
 
-typedef struct _lidarPoint {
-  float x,y,z; 
-  int nb_of_returns; //how many returns this pulse has
-  int return_number; //the number of this return
-  int code;  //classification code read from file 
-  
-  int mycode; //classification code assigned by us 
-} lidarPoint;
-
-
-//the array of lidar points; note: this needs to be global because it
-//needs to be rendered
-vector<lidarPoint>  points;
-
-//bounding box of the points, updated when the terrain is loaded from file
-float minx, maxx, miny, maxy, minz, maxz; 
-
+// graphics 
 const int WINDOWSIZE = 500; 
-
 
 //pos[] and theta[] represent the translation and rotation on x,y and
 //z axes, respectively. They represent how the user wants to look at
-//the terrain. The user can change them through keypresses
+//the terrain. The user can change them through keypresses. To rotate,
+//press x,X, y,Y, z,Z to rotate around x, y, z respectively. To move
+//up/down, left.right, front/back
 GLfloat pos[3] = {0,0,0};
 GLfloat theta[3] = {0,0,0};
 
@@ -75,70 +63,36 @@ GLint fillmode = 0;
 
 
 /* ************************************************************ */
-/* FILTERING POINTS BY THEIR RETURN SITUATION */
+/* FILTERING POINTS BY THEIR RETURN */
 /* A LiDAR point has a return number and a number of returns (for its
-   pulse).  A pulse may get several returns over vegetation, lets say
-   3, and this will result in three points:
-
-   return number/number of returns
-   1/3 x y z
-   2/3 x y z
-   3/3 x y z 
-   note the x,y,z may be different for different return numbers 
-
-   For bare earth, you will only have one return: 
-   1/1
-
+   pulse). Vegetation usually gives in >1 returns.  Bare earth and
+   buildings have 1 return.
 
    If ALL_RETURN, all points  are included
-   IF FIRST_RETURN, only the first returns are included, ie points with return number=1
+   
+   IF FIRST_RETURN, only the first returns are included, ie points with return_number=1
 
    If LAST_RETURN, only the last returns are included, i.e points with
-   1/1 and points with 2/2 or 3/3 or 4/4
+   return_nb = nb_of_returns
 */
-#define ALL_RETURN 0 
-#define FIRST_RETURN 1
-#define LAST_RETURN 2
-#define MORE_THAN_ONE_RETURN 3
-#define NB_WHICH_RETURN_OPTIONS 4
-// WHICH_RETURN  cycles through all options via keypress 'm'
-int WHICH_RETURN = ALL_RETURN; 
 
 
+const int ALL_RETURN = 0;  
+const int FIRST_RETURN = 1; 
+const int LAST_RETURN = 2; 
+const int MORE_THAN_ONE_RETURN = 3; 
+const int ONE_RETURN = 4;
 
-/* ************************************************************ */
-/* FILTERING POINTS BY THEIR classification code */
-/* 
-lidar classification codes  [from ...somewhere on internet]
+int which_return = ALL_RETURN; 
 
-0 bever classified 
-1 unassigned 
-2 ground 
-3 low vegetation 
-4 medium vegetation 
-5 high vegetation
-6 building 
-7 low point (noise)
-8 model key-point (mass point)
-9 water
-10 railroad
-11 road
-12 overlap 
-13 wire-guard (shield)
-14 wire-conductor (phase)
-15 transmission tower
-17 bridge
-18 hight point (noise)
-19-255 reserved for asprs definition
- */
 
-//These are used by render() to decide  what points to render.
-//By default draw everything; each one of these classes can be toggled
-//on/off in keypress()
-int GROUND=1; 
-int VEG=1; 
-int BUILDING=1; 
-int OTHER=1; 
+/* These are used to decide which points to render.  By default draw
+   everything; each one of these flags can be toggled on/off in keypress()
+*/
+int RENDER_GROUND = 1; 
+int RENDER_VEG = 1; 
+int RENDER_BUILDING = 1; 
+int RENDER_OTHER = 1; 
 
 
 
@@ -146,22 +100,23 @@ int OTHER=1;
 /* **************************************** */
 /* chosing a color map: 
 
-   If COLORMAP == ONE_COLOR:  draw all filtered points in one color 
+   If COLORMAP == ONE_COLOR:  draw points in one color 
 
-   If COLORMAP == CODE_COLOR: draw all filtered points with a color
-   based on their classification code p.code which was read from the
-   las file
+   If COLORMAP == CODE_COLOR: draw points with a color based on p.code
+   (which was read from the las file)
 
-   If COLORMAP == MYCODE_COLOR:  draw all filtered points with a color
-   based on their classification code p.mycode which we computed 
+   If COLORMAP == MYCODE_COLOR: draw points with a color based on
+   p.mycode (computed by us)
 
    COLORMAP starts by default as ONE_COLOR and cycles through all
    options via keypress 'c'.
 */
-#define ONE_COLOR 0  
-#define CODE_COLOR 1 
-#define MYCODE_COLOR 2
-#define NB_COLORMAP_CHOICES 3
+const int ONE_COLOR = 0;   
+const int CODE_COLOR = 1; 
+const int MYCODE_COLOR =2;
+const int NB_COLORMAP_CHOICES =3;
+
+//COLORMAP cycles through all choices  via keypress 'c'
 int COLORMAP = ONE_COLOR; 
 
 
@@ -176,39 +131,31 @@ GLfloat gray[3] = {0.5, 0.5, 0.5};
 GLfloat yellow[3] = {1.0, 1.0, 0.0};
 GLfloat magenta[3] = {1.0, 0.0, 1.0};
 GLfloat cyan[3] = {0.0, 1.0, 1.0};
-
-/* from https://www.opengl.org/discussion_boards/showthread.php/132502-Color-tables  */
 GLfloat brown[3] = { 0.647059, 0.164706, 0.164706}; 
 GLfloat DarkBrown[3] = { 0.36, 0.25, 0.20}; 
-GLfloat DarkTan[3] = { 0.59, 0.41, 0.31};
-GLfloat Maroon[3]= { 0.556863, 0.137255, 0.419608}; 
-GLfloat DarkWood[3] = { 0.52, 0.37, 0.26}; 
-
-GLfloat  Copper[3] = { 0.72,  0.45,  0.20};
-
-GLfloat green1[3] = {.5, 1, 0.5};
-GLfloat green2[3] = {0.0, .8, 0.0};
-GLfloat green3[3] = {0.0, .5, 0.0};
 GLfloat ForestGreen[3] = { 0.137255, 0.556863, 0.137255};
 GLfloat MediumForestGreen[3] = { 0.419608 , 0.556863 , 0.137255}; 
 GLfloat LimeGreen[3] ={ 0.196078,  0.8 , 0.196078}; 
-
 GLfloat Orange[3] = { 1, .5, 0}; 
-GLfloat Silver[3] = { 0.90, 0.91, 0.98};
-GLfloat Wheat[3] = { 0.847059 , 0.847059, 0.74902}; 
 
 
 
 //the length (maxx-minx), width (maxy-miny) and height (maxz-minz)  of the dataset 
 double dim_x, dim_y, dim_z; 
 
+//copy from lpoints, for faster access during rendering 
+double minx, maxx, miny, maxy, minz, maxz;
+
 //scale is used to map the points to [-1,1] x [-1, 1] x [-1, 1]. Scale
 //is the same on all dimensions. It is initialized after reading
 //points from file to either 1/dim_x or 1/dim_y, whichever is
 //smallest.
 double scale = 1; 
+
 //the heights can be vertically exagerated. Controlled by keypress >, <
 double  Z_EXAGERRATION  = 1; 
+
+
 
 
 /* forward declarations of functions */
@@ -220,74 +167,17 @@ void draw_xy_rect(GLfloat z, GLfloat* col);
 void draw_xz_rect(GLfloat y, GLfloat* col); 
 void draw_yz_rect(GLfloat x, GLfloat* col); 
 void cube(GLfloat side); 
-void filledcube(GLfloat side); 
 void draw_axes(); 
-
-//reads the points from file in global array points
-void readPointsFromFile(char* fname);
-
-
-
-
-/* NOTE: file.txt must be obtained from file.las with las2txt with
-   -parse xyznrc in this order
-
-   last2txt -o file.las -o file.txt -parse xyznrc
- */
-//reads the points from file in global array points
-void readPointsFromFile(char* fname) {
-  
-  FILE* file = fopen(fname, "r"); 
-  if (!file) {
-    printf("cannot open file %s\n",  fname);
-    exit(1); 
-  }
-
-  lidarPoint p; 
-  while (1) {
-    //-parse xyzcr
-    if (fscanf(file, "%f %f %f %d %d %d", 
-	       &p.x, &p.y, &p.z, &p.nb_of_returns, &p.return_number, &p.code) <6)  break; 
-    
-    //else: if we are here,  we got another point
-    //printf("reading %f, %f, %f\n", p.x, p.y, p.z); 
-    
-    //insert the point in points[] array 
-    p.mycode=0; //everything unclassified
-    points.push_back(p); 
-    
-    //update bounding box
-    if (points.size() == 1) {
-      minx=maxx = p.x; 
-      miny=maxy = p.y; 
-      minz=maxz = p.z; 
-    } else {
-      if (minx > p.x) minx=p.x; 
-      if (maxx < p.x) maxx = p.x; 
-      if (miny > p.y) miny=p.y; 
-      if (maxy < p.y) maxy = p.y; 
-      if (minz > p.z) minz=p.z; 
-      if (maxz < p.z) maxz = p.z; 
-    }
-  } //while 
-  
-  fclose(file); 
-
-  //print info 
-  printf("total %d points in  [%f, %f], [%f,%f], [%f,%f]\n", 
-	 (int)points.size(), minx, maxx, miny,maxy, minz, maxz); 
-
- //set the scale 
-  dim_x = maxx - minx; 
-  dim_y = maxy - miny; 
-  dim_z = maxz - minz; 
-  scale = (dim_x > dim_y) ? 1.0/dim_x: 1.0/dim_y; 
-  printf("dim_x = %.1f, dim_y = %.1f, dim_z=%.1f, scale=%f\n", dim_x, dim_y, dim_z, scale); 
-  
-}
+GLfloat xtoscreen(GLfloat x);
+GLfloat ytoscreen(GLfloat y);
+GLfloat ztoscreen(GLfloat z); 
 
 
 
+
+
+
+/************************************************************/
 int main(int argc, char** argv) {
 
   //read number of points from user
@@ -295,9 +185,25 @@ int main(int argc, char** argv) {
     printf("usage: %s file.txt\n", argv[0]);
     exit(1); 
   }
-  //this allocates and initializes the array that holds the points
-  readPointsFromFile(argv[1]); 
 
+  //this populates the global that holds the points
+  read_lidar_from_file(argv[1], &lpoints); 
+  
+  //set the length, width and height of the datasetm to be used in graphics
+  minx = lpoints.minx;
+  maxx = lpoints.maxx;
+  miny = lpoints.miny;
+  maxy = lpoints.maxy;
+  minz = lpoints.minz;
+  maxz = lpoints.maxz;
+  
+  dim_x = lpoints.maxx - lpoints.minx; 
+  dim_y = lpoints.maxy - lpoints.miny; 
+  dim_z = lpoints.maxz - lpoints.minz; 
+  scale = (dim_x > dim_y) ? 1.0/dim_x: 1.0/dim_y; 
+  printf("\tdim_x = %.1f, dim_y = %.1f, dim_z=%.1f, scale=%f\n", dim_x, dim_y, dim_z, scale); 
+
+  
  
   /* OPEN GL STUFF */
   /* open a window and initialize GLUT stuff */
@@ -323,19 +229,14 @@ int main(int argc, char** argv) {
   /* the frustrum is from z=-1 to z=-100; camera is at (0,0,0) looking
      down the negative Z-axis */
   
-  //ortho instead? 
-  //the view frustrum is z=[0, -10]
-  // glOrtho(-1, 1, -1, 1, 0,-10); //left, right, top, bottom, near, far
-  //LT: can;t get this work 
-
   //set initial view: bring all z-values (which are in [-1, 1] down by
   //3 to bring them in the view frustrum of [-1, -100].
-  pos[0] = pos[1] = 0; pos[2] = -3; 
+  pos[0] = pos[1] = 0; pos[2] = -3;  
   
   //initialize rotation to see terrain tilted, rather than top-down
   theta[0] = -45; theta[1] = theta[2] = 0; 
   
-  /* start the event handler */
+  /* start the graphics event handler */
   glutMainLoop();
 
   return 0;
@@ -370,23 +271,50 @@ void display(void) {
   glRotatef(theta[2], 0,0,1);//rotate theta[2] around z-axis
   
   /* We translated the local reference system where we want it to be;
-     now we draw the object in the local reference system.  */
+     now we draw the objects in the local reference system.  */
   draw_points();  
     
   //don't need to draw a cube but I found it nice for perspective 
-  cube(1); //draw a cube of size 1
+  //cube(1); //draw a cube of size 1
 
   glFlush();
 }
 
 
+void print_options() {
+
+  printf("press: \n");
+
+  printf("\tc: to cycle through colorings\n");
+
+  printf("\t1: draw only  points on pulses with 1 return \n");
+  printf("\t2: draw only first returns i.e. points with return_number=1)\n");
+  printf("\t3: draw only last returns i.e. points with return_number = number_of_returns\n");
+  printf("\t4: draw only points that have >1 returns\n"); 
+  printf("\t5: draw all returns\n"); 
+
+  printf("\t+/-: zoom in/out\n");
+  printf("\t>/<: increase/decrase vertical exageration of heights\n");
+ 
+  printf("\tg: toggle showing points  with code=ground (2)\n");
+  printf("\tv: toggle showing points  with code=vegetation (3,4,5)\n");
+  printf("\th: toggle showing points  with code=buildings(6)\n");
+  printf("\to: toggle showing points  with code=other(...)\n");
+
+
+  printf("\tx/X,y/Y,z/Z: rotate\n");
+  printf("\tf/b/u/d/l/r: forward/back/up/down/left/right\n");
+
+   printf("\tq: exit\n");
+  
+} 
 
 /* this function is called whenever  key is pressed */
 void keypress(unsigned char key, int x, int y) {
 
   switch(key) {
 
-  case '2': 
+  case 'a': 
     //3d orthogonal projection, view from straight above
     glMatrixMode(GL_PROJECTION);
     //glLoadIdentity();
@@ -401,7 +329,7 @@ void keypress(unsigned char key, int x, int y) {
     glutPostRedisplay();
     break;
   
-  case '3': 
+  case 'p': 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     gluPerspective(60, 1 /* aspect */, 1, 100.0); /* the frustrum is from z=-1 to z=-100 */
@@ -417,14 +345,25 @@ void keypress(unsigned char key, int x, int y) {
     break;
 
   case 'c': 
-    //change the colormap  
+    //cycle through  the colormaps options 
     COLORMAP= (COLORMAP+1) % NB_COLORMAP_CHOICES; 
+
     switch (COLORMAP) {
     case ONE_COLOR: 
       printf("colormap: one color\n"); 
       break; 
     case CODE_COLOR: 
-      printf("colormap: by code\n"); 
+      printf("colormap: by code\n");
+      printf("\t: 1 not classified: yellow\n");
+      printf("\t: 2 not assigned: orange\n");
+      printf("\t: 3 ground: dark brown\n");
+      printf("\t: 4 low veg: lime green\n");
+      printf("\t: 5 med veg: med green\n");
+      printf("\t: 6 high veg : forest green\n");
+      printf("\t: 7, 18 noise: magenta\n");
+      printf("\t: 8, 12 reserved: white\n");
+      printf("\t: 9 water: blue\n");
+      printf("\t: 10,11,14,15,16,17: rail, roads, wires, towers: gray\n");
       break; 
     case MYCODE_COLOR: 
       printf("colormap: by mycode\n"); 
@@ -436,49 +375,57 @@ void keypress(unsigned char key, int x, int y) {
     glutPostRedisplay();
     break;
 
-  case 't': 
-    //render points with one/more than one return 
-    WHICH_RETURN = (WHICH_RETURN + 1) % NB_WHICH_RETURN_OPTIONS; 
-    switch (WHICH_RETURN) {
-    case ALL_RETURN: 
-      printf("draw all returns\n"); 
-      break; 
-    case FIRST_RETURN: 
-      printf("draw only first return (i.e.points with return_number=1)\n"); 
-      break; 
-    case LAST_RETURN: 
-      printf("draw only last return (i.e. points with return_number = number_of_returns)\n");
-      break; 
-    case MORE_THAN_ONE_RETURN: 
-      printf("draw only points that has >1 returns\n"); 
-      break; 
-    default: 
-      break; 
-    }
+ 
+    // filter based on returns    
+  case '1':
+    printf("1: draw only points with nb_returns = 1\n"); 
+    which_return = ONE_RETURN;
+    glutPostRedisplay();
+    break; 
+  case '2':
+    printf("2: draw only first returns i.e. points with return_number=1)\n");
+    which_return = FIRST_RETURN;
+    glutPostRedisplay();
+    break; 
+  case '3':
+    printf("3: draw only last returns i.e. points with return_number = number_of_returns\n");
+    which_return = LAST_RETURN;
     glutPostRedisplay();
     break;
+  case '4':
+    printf("4: draw only points that have >1 returns\n"); 
+    which_return = MORE_THAN_ONE_RETURN; 
+    glutPostRedisplay();
+    break; 
+  case '5':
+    printf("5: draw all returns\n"); 
+    which_return = ALL_RETURN;
+    glutPostRedisplay();
+    break; 
 
+ 
+    
   case 'g': 
     //toggle off rendering ground points   (code=2)
-    GROUND = !GROUND; 
+    RENDER_GROUND = !RENDER_GROUND; 
     glutPostRedisplay();
     break;
 
   case 'v': 
     //toggle off rendering vegetation points  (code=3,4,5)
-    VEG = !VEG; 
+    RENDER_VEG = !RENDER_VEG; 
     glutPostRedisplay();
     break;
 
   case 'h':
     //toggle off rendering building points  (code=6)
-    BUILDING = !BUILDING; 
+    RENDER_BUILDING = !RENDER_BUILDING; 
     glutPostRedisplay();
     break;
 
   case 'o': 
     //toggle off rendering "other" ie points that are not ground, vegetation or building 
-    OTHER=!OTHER; 
+    RENDER_OTHER = !RENDER_OTHER; 
     glutPostRedisplay();
     break;
 
@@ -512,25 +459,21 @@ void keypress(unsigned char key, int x, int y) {
     //backward, move away from terrain 
   case 'b':
     pos[2] -= 0.1;
-    //glTranslatef(0,0, -0.1);
     glutPostRedisplay();
     break;
     //forward, move towards terrain 
   case 'f':
     pos[2] += 0.1; 
-    //glTranslatef(0,0, 0.1);
     glutPostRedisplay();
     break;
     //down 
   case 'd': 
      pos[1] -= 0.1; 
-    //glTranslatef(0,0.5,0);
-    glutPostRedisplay();
+     glutPostRedisplay();
     break;
     //up
   case 'u': 
     pos[1] += 0.1; 
-    //glTranslatef(0,-0.5,0);
     glutPostRedisplay();
     break;
     //left 
@@ -554,12 +497,12 @@ void keypress(unsigned char key, int x, int y) {
     break;
     
   case '>': 
-    Z_EXAGERRATION *= 1.5; 
+    Z_EXAGERRATION *= 1.1; 
      glutPostRedisplay();
     break;
 
   case '<': 
-    Z_EXAGERRATION /= 1.5; 
+    Z_EXAGERRATION /= 1.1; 
     glutPostRedisplay();
     break;
 
@@ -573,8 +516,188 @@ void keypress(unsigned char key, int x, int y) {
   case 'q':
     exit(0);
     break;
-  } 
+  }
+  print_options();
+  
 }//keypress
+
+
+
+//this function is called to set the color of a point based on p.code
+void setColorByCode(lidar_point p) {
+  switch (p.code) {
+  case 0: //never classified
+    glColor3fv(yellow); 
+    break; 
+  case 1: //unnasigned 
+    glColor3fv(Orange); 
+    break; 
+  case 2: //ground 
+    glColor3fv(DarkBrown); 
+    break; 
+  case 3: //low vegetation 
+    glColor3fv(LimeGreen); 
+    break;
+  case 4: //medium vegetation 
+    glColor3fv(MediumForestGreen); 
+    break;
+  case 5: //high vegetation 
+    glColor3fv(ForestGreen); 
+    break;
+  case 6: //building 
+    glColor3fv(red); 
+    break;
+  case 7: //noise
+    glColor3fv(magenta); 
+    break;
+  case 8: //reserved 
+    glColor3fv(white); 
+    break;
+  case 9: //water 
+    glColor3fv(blue); 
+    break;
+  case 10: //rail 
+    glColor3fv(gray); 
+    break;
+  case 11: //road surface 
+    glColor3fv(gray); 
+    break;
+  case 12:  //reserved
+    glColor3fv(white); 
+    break;
+  case 13: 
+  case 14: //wire
+    glColor3fv(gray); 
+    break;
+  case 15: //transmission tower
+    glColor3fv(gray); 
+    break;
+  case 16: //wire 
+  case 17: //bridge deck 
+    glColor3fv(gray); 
+    break;
+  case 18: //high noise
+    glColor3fv(magenta); 
+    break;
+  default: 
+    printf("panic: encountered unknown code >18"); 
+  }
+} //setColorByCode
+
+
+
+//this function is called to set the color of a point p based on
+//p.myCode
+void setColorByMycode(lidar_point p) {
+
+  //fill in 
+  
+  glColor3fv(gray);
+}
+
+//draw everything with one color 
+void  setColorOneColor(lidar_point p) {
+
+   glColor3fv(yellow); //yellow should be a constant
+  return; 
+}
+
+
+
+//This function is called to set the color of a point p before it is
+//rendered
+void setColor(lidar_point p) { 
+
+  if (COLORMAP == ONE_COLOR) {
+    //draw all points with same color 
+    setColorOneColor(p); 
+ 
+  } else if (COLORMAP == CODE_COLOR) {
+    setColorByCode(p); 
+  
+  } else if (COLORMAP == MYCODE_COLOR) {
+    setColorByMycode(p); 
+  
+  } else {
+    printf("unkown colormap options.\n");
+    exit(1); 
+  }
+} //setColor()
+
+
+
+
+
+
+/* ****************************** */
+/* Draw the points.  
+
+   NOTE: The points are in the range x=[minx, maxx], y=[miny,
+   maxy], z=[minz, maxz] and they must be mapped into
+   x=[-1,1], y=[-1, 1], z=[-1,1]
+  */
+void draw_points(){
+  
+  //the actual points 
+  vector<lidar_point> data = lpoints.data;
+  
+  lidar_point p; 
+  glBegin(GL_POINTS); 
+  for (int i=0; i < data.size(); i++) {
+
+    //current point; do we want to include it in the rendering? 
+    p = data[i]; 
+    
+    //FIRST FILTER BY RETURN
+    if (which_return == FIRST_RETURN) // we only want first returns
+      if (p.return_number!=1) continue;
+
+    if (which_return == LAST_RETURN) // we only want last returns
+      if (p.return_number !=p.nb_of_returns) continue;
+
+    if (which_return == MORE_THAN_ONE_RETURN) //we only want pulses that have > 1 return 
+      if (p.nb_of_returns ==1) continue;
+
+    if (which_return == ONE_RETURN) //we only want pulses that have > 1 return 
+      if (p.nb_of_returns > 1) continue;
+
+
+    
+    //if (which_return==ALL_RETURN)  // we want all points so keep going 
+
+
+    //if point made it here, it has the return we want
+
+    //NEXT FILTER BY CODE
+    //if this point is 2 and we dont want to render ground, skip it 
+    if (p.code == 2 && !RENDER_GROUND )  continue; 
+
+    //if this point is 3,4,5 and we don't want to draw the vegetation,skip it
+    if ((p.code == 3||p.code == 4||p.code == 5) && !RENDER_VEG)  continue; 
+
+    //if this point if 6 and we don't want to draw teh buildings, skip it 
+    if (p.code == 6 && !RENDER_BUILDING) continue; 
+
+    //if this point is "other" and we don't want to draw "other" skip it 
+    if ((p.code == 0 || p.code ==1 || p.code >6) && !RENDER_OTHER) continue; 
+    
+    //if point made it here, it needs to be rendered 
+    
+    //set the color of this point
+    setColor(p);
+    
+    //tell openGL to render it
+    glVertex3f(xtoscreen(data[i].x),
+	       ytoscreen(data[i].y), 
+	       ztoscreen(data[i].z));
+    
+  }
+  
+  glEnd(); 
+}//draw_points
+
+
+
 
 
 
@@ -614,171 +737,10 @@ GLfloat ztoscreen(GLfloat z) {
   // return ((z-minz)/(maxz-minz)); 
 
   //map at the same scale as on xy
+  // double zscale = 1/(maxz-minz);
+  //zscale = zscale/Z_EXAGERRATION;
   return (z-minz)* scale * Z_EXAGERRATION; 
 }
-
-
-//set color based on p.code
-void setColorByCode(lidarPoint p) {
-  switch (p.code) {
-  case 0: //never classified
-    glColor3fv(yellow); 
-    break; 
-  case 1: //unnasigned 
-    glColor3fv(Orange); 
-    break; 
-  case 2: //ground 
-    //    glColor3fv(DarkWood); 
-    glColor3fv(DarkBrown); 
-    break; 
-  case 3: //low vegetation 
-    glColor3fv(LimeGreen); 
-    break;
-  case 4: //medium vegetation 
-    glColor3fv(MediumForestGreen); 
-    break;
-  case 5: //high vegetation 
-    glColor3fv(ForestGreen); 
-    break;
-  case 6: //building 
-    //glColor3fv(Tan); 
-    glColor3fv(Copper); 
-    break;
-  case 7: //noise
-    glColor3fv(magenta); 
-    break;
-  case 8: //reserved 
-    glColor3fv(white); 
-    break;
-  case 9: //water 
-    glColor3fv(blue); 
-    break;
-  case 10: //rail 
-    glColor3fv(gray); 
-    break;
-  case 11: //road surface 
-    glColor3fv(gray); 
-    break;
-  case 12:  //reserved
-    glColor3fv(white); 
-    break;
-  case 13: 
-  case 14: //wire
-    glColor3fv(gray); 
-    break;
-  case 15: //transmission tower
-    glColor3fv(Wheat); 
-    break;
-  case 16: //wire 
-  case 17: //bridge deck 
-    glColor3fv(blue); 
-    break;
-  case 18: //high noise
-    glColor3fv(magenta); 
-    break;
-  default: 
-    printf("panic: encountered unknown code >18"); 
-  }
-} //setColorByCode
-
-
-
-//put your own colormap here  based on p.mycode
-void setColorByMycode(lidarPoint p) {
-
-  glColor3fv(blue);
-}
-
-//draw everything with one color 
-void  setColorOneColor(lidarPoint p) {
-
-   glColor3fv(yellow); //yellow should be a constant...
-  return; 
-}
-
-
-
-//point p has passed all the filters and must be rendered. Set its
-//color. 
-void setColor(lidarPoint p) { 
-
-  if (COLORMAP == ONE_COLOR) {
-    //draw all points with same color 
-    setColorOneColor(p); 
- 
-  } else if (COLORMAP == MYCODE_COLOR) {
-    setColorByCode(p); 
-  
-  } else if (COLORMAP == CODE_COLOR) {
-    setColorByMycode(p); 
-  
-  } else {
-    printf("unkown colormap options.oops.\n");
-    exit(1); 
-  }
-} //setColor()
-
-
-
-
-
-
-/* ****************************** */
-/* Draw the array of points stored in global variable points[].  
-
-   NOTE: The points are in the range x=[minx, maxx], y=[miny,
-   maxy], z=[minz, maxz] and they must be mapped into
-   x=[-1,1], y=[-1, 1], z=[-1,1]
-  */
-void draw_points(){
-  
-
-  glBegin(GL_POINTS); 
-  int i;
-  lidarPoint p; 
-  for (i=0; i < points.size(); i++) {
-   
-    p = points[i]; 
-    
-    //FIRST FILTER BY RETURN
-    if (WHICH_RETURN==FIRST_RETURN) // we only want the first returns
-      if (p.return_number!=1) continue;
-    if (WHICH_RETURN==LAST_RETURN) // we only want the last returns
-      if (p.return_number !=p.nb_of_returns) continue;
-    if (WHICH_RETURN==MORE_THAN_ONE_RETURN) //we only want pulses that had more than 1 return 
-      if (p.nb_of_returns ==1) continue;
-    //if (WHICH_RETURN==ALL_RETURN)  // we want all points so keep going 
-
-
-    //all the points that made it here must have the right nb of returns that we want 
-
-    //NEXT FILTER BY CODE
-    //if this point is 2 and we dont want to render ground, skip it 
-    if (p.code == 2 && !GROUND )  continue; 
-
-    //if this point is 3,4,5 and we don't want to draw the vegetation,skip it
-    if ((p.code == 3||p.code == 4||p.code == 5) && !VEG)  continue; 
-
-    //if this point if 6 and we don't want to draw teh buildings, skip it 
-    if (p.code == 6 && !BUILDING) continue; 
-
-    //if this point is "other" and we don't want to draw "other" skip it 
-    if ((p.code == 0 || p.code ==1 || p.code >6) && !OTHER) continue; 
-    
-    //all the points that made it here must be drawn
-    
-    
-    //set the color of this point; 
-    setColor(p); 
-   
-
-    glVertex3f(xtoscreen(points[i].x),
-	       ytoscreen(points[i].y), 
-	       ztoscreen(points[i].z)); 
-  }
-  
-  glEnd(); 
-}//draw_points
 
 
 
@@ -850,21 +812,3 @@ void cube(GLfloat side) {
 }
 
 
-
-//draw a filled cube  [-side,side]^3
-void filledcube(GLfloat side) {
-  
-  glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-  
-  /* back, front faces */
-  draw_xy_rect(-side,side, yellow);
-  draw_xy_rect(side,side, yellow);
-  
-  /* left, right faces*/
-  draw_yz_rect(-side, side, yellow);
-  draw_yz_rect(side, side, yellow);
-  
-  /* up, down  faces  */
-  draw_xz_rect(side,side, yellow);
-  draw_xz_rect(-side,side, yellow);
-}
