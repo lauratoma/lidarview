@@ -1,5 +1,7 @@
 
 #include "lidar.hpp"
+#include <assert.h>
+
 #include <vector>
 using namespace std; 
 
@@ -134,7 +136,18 @@ void classify(lidar_point_cloud & points) {
   //float minheight, max_height; 
   for (int i=0; i< size(points); i++) {
 
-    points.data[i].mycode = 6; 
+    lidar_point p = points.data[i];
+
+    //vegetation: points with > 1 return, and not last return  
+    if ((p.nb_of_returns>1) && (p.return_number != p.nb_of_returns)) {
+      points.data[i].mycode = 4; 
+    }
+
+    //under the vegetation is ground
+    if((p.nb_of_returns > 1) && (p.return_number == p.nb_of_returns)) {
+      points.data[i].mycode = 2; 
+    }
+    
   } 
   
 } 

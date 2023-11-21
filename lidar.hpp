@@ -26,7 +26,6 @@ typedef struct _lidar_point {
 
 typedef struct _lidar_data {
 
-  int n; //nb points = vector.size(); 
   vector<lidar_point> data; 
 
   //bounding box

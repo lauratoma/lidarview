@@ -132,12 +132,11 @@ GLfloat yellow[3] = {1.0, 1.0, 0.0};
 GLfloat magenta[3] = {1.0, 0.0, 1.0};
 GLfloat cyan[3] = {0.0, 1.0, 1.0};
 GLfloat brown[3] = { 0.647059, 0.164706, 0.164706}; 
-GLfloat DarkBrown[3] = { 0.36, 0.25, 0.20}; 
 GLfloat ForestGreen[3] = { 0.137255, 0.556863, 0.137255};
 GLfloat MediumForestGreen[3] = { 0.419608 , 0.556863 , 0.137255}; 
 GLfloat LimeGreen[3] ={ 0.196078,  0.8 , 0.196078}; 
 GLfloat Orange[3] = { 1, .5, 0}; 
-
+GLfloat Tan[3] = {.82, .71, .55};
 
 
 //the length (maxx-minx), width (maxy-miny) and height (maxz-minz)  of the dataset 
@@ -188,6 +187,8 @@ int main(int argc, char** argv) {
 
   //this populates the global that holds the points
   read_lidar_from_file(argv[1], &lpoints); 
+
+  classify(lpoints);
   
   //set the length, width and height of the datasetm to be used in graphics
   minx = lpoints.minx;
@@ -356,7 +357,7 @@ void keypress(unsigned char key, int x, int y) {
       printf("colormap: by code\n");
       printf("\t: 1 not classified: yellow\n");
       printf("\t: 2 not assigned: orange\n");
-      printf("\t: 3 ground: dark brown\n");
+      printf("\t: 3 ground: tan\n");
       printf("\t: 4 low veg: lime green\n");
       printf("\t: 5 med veg: med green\n");
       printf("\t: 6 high veg : forest green\n");
@@ -533,7 +534,7 @@ void setColorByCode(lidar_point p) {
     glColor3fv(Orange); 
     break; 
   case 2: //ground 
-    glColor3fv(DarkBrown); 
+    glColor3fv(Tan); 
     break; 
   case 3: //low vegetation 
     glColor3fv(LimeGreen); 
@@ -591,8 +592,17 @@ void setColorByCode(lidar_point p) {
 void setColorByMycode(lidar_point p) {
 
   //fill in 
-  
-  glColor3fv(gray);
+  switch (p.mycode) {
+  case 4: //medium vegetation 
+    glColor3fv(LimeGreen); 
+    break;
+  case 2: //ground 
+    glColor3fv(Tan); 
+    break;
+    
+  default: 
+    glColor3fv(gray);
+  }
 }
 
 //draw everything with one color 
@@ -625,7 +635,12 @@ void setColor(lidar_point p) {
 } //setColor()
 
 
-
+int get_code(lidar_point p) {
+  if (COLORMAP == MYCODE_COLOR)
+    return p.mycode;
+  else
+    return p.code; 
+} 
 
 
 
@@ -658,7 +673,7 @@ void draw_points(){
     if (which_return == MORE_THAN_ONE_RETURN) //we only want pulses that have > 1 return 
       if (p.nb_of_returns ==1) continue;
 
-    if (which_return == ONE_RETURN) //we only want pulses that have > 1 return 
+    if (which_return == ONE_RETURN) //we only want pulses that have == 1 return 
       if (p.nb_of_returns > 1) continue;
 
 
@@ -669,17 +684,19 @@ void draw_points(){
     //if point made it here, it has the return we want
 
     //NEXT FILTER BY CODE
-    //if this point is 2 and we dont want to render ground, skip it 
-    if (p.code == 2 && !RENDER_GROUND )  continue; 
+    //if this point is 2 and we dont want to render ground, skip it
+    int code = get_code(p);
+    
+    if ((code == 2) && !RENDER_GROUND)  continue; 
 
     //if this point is 3,4,5 and we don't want to draw the vegetation,skip it
-    if ((p.code == 3||p.code == 4||p.code == 5) && !RENDER_VEG)  continue; 
+    if (((code == 3) || (code == 4) || (code == 5)) && !RENDER_VEG)  continue; 
 
     //if this point if 6 and we don't want to draw teh buildings, skip it 
-    if (p.code == 6 && !RENDER_BUILDING) continue; 
+  if ((code == 6) && !RENDER_BUILDING) continue; 
 
     //if this point is "other" and we don't want to draw "other" skip it 
-    if ((p.code == 0 || p.code ==1 || p.code >6) && !RENDER_OTHER) continue; 
+  if (((code == 0) || (code ==1) || (code >6)) && !RENDER_OTHER) continue; 
     
     //if point made it here, it needs to be rendered 
     
