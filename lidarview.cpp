@@ -170,7 +170,7 @@ void draw_axes();
 GLfloat xtoscreen(GLfloat x);
 GLfloat ytoscreen(GLfloat y);
 GLfloat ztoscreen(GLfloat z); 
-
+void filledcube(GLfloat side); 
 
 
 
@@ -231,11 +231,11 @@ int main(int argc, char** argv) {
      down the negative Z-axis */
   
   //set initial view: bring all z-values (which are in [-1, 1] down by
-  //3 to bring them in the view frustrum of [-1, -100].
-  pos[0] = pos[1] = 0; pos[2] = -3;  
+  //2 to bring them in the view frustrum of [-1, -100].
+  pos[0] = pos[1] = 0; pos[2] = -2;  
   
   //initialize rotation to see terrain tilted, rather than top-down
-  theta[0] = -45; theta[1] = theta[2] = 0; 
+  theta[0] = -60; theta[1] = theta[2] = 0; 
   
   /* start the graphics event handler */
   glutMainLoop();
@@ -270,14 +270,20 @@ void display(void) {
   glRotatef(theta[0], 1,0,0); //rotate theta[0] around x-axis
   glRotatef(theta[1], 0,1,0);//rotate theta[1] around y-axis
   glRotatef(theta[2], 0,0,1);//rotate theta[2] around z-axis
+
+  
+  //scale to [-1, 1] ^3  
+  //glScalef(scale, scale, Z_EXAGERRATION*scale);
+
+  //translate so that points are in [-dimx/2, dimx/2] x [-dimy/2,
+  //dimy/2] x [-dimz/2, dimz/2]
+  //glTranslatef(-(minx+dim_x/2), -(miny+dim_y/2), -(minz+dim_z/2));
   
   /* We translated the local reference system where we want it to be;
      now we draw the objects in the local reference system.  */
+  //the points are in [minx,maxx]x[miny,maxy]x[minz,maxz]
   draw_points();  
     
-  //don't need to draw a cube but I found it nice for perspective 
-  //cube(1); //draw a cube of size 1
-
   glFlush();
 }
 
@@ -302,7 +308,8 @@ void print_options() {
   printf("\th: toggle showing points  with code=buildings(6)\n");
   printf("\to: toggle showing points  with code=other(...)\n");
 
-
+  printf("\t9: reset to initial position\n");
+  
   printf("\tx/X,y/Y,z/Z: rotate\n");
   printf("\tf/b/u/d/l/r: forward/back/up/down/left/right\n");
 
@@ -498,22 +505,26 @@ void keypress(unsigned char key, int x, int y) {
     break;
     
   case '>': 
-    Z_EXAGERRATION *= 1.1; 
+    Z_EXAGERRATION *= 1.1;
+    printf("Z_EXAGERRATION=%.1f\n", Z_EXAGERRATION); 
      glutPostRedisplay();
     break;
 
   case '<': 
-    Z_EXAGERRATION /= 1.1; 
+    Z_EXAGERRATION /= 1.1;
+    printf("Z_EXAGERRATION=%.1f\n", Z_EXAGERRATION); 
     glutPostRedisplay();
     break;
 
-    
-    //fillmode 
-  case 'w': 
-    fillmode = !fillmode; 
+
+  case '9': //reset all transformations (back to original position)
+    pos[0] = pos[1] = 0; pos[2] = -3;
+    theta[0] = theta[1] = theta[2] = 0;
+    Z_EXAGERRATION = 1;
     glutPostRedisplay();
     break;
-    
+
+  
   case 'q':
     exit(0);
     break;
@@ -704,10 +715,25 @@ void draw_points(){
     setColor(p);
     
     //tell openGL to render it
-    glVertex3f(xtoscreen(data[i].x),
-	       ytoscreen(data[i].y), 
-	       ztoscreen(data[i].z));
     
+    
+      glVertex3f(xtoscreen(data[i].x),
+	       ytoscreen(data[i].y), 
+    	       ztoscreen(data[i].z));
+    
+    //glVertex3f(data[i].x, data[i].y, data[i].z);
+
+    /* 
+    //draw the point as a small cube 
+    //first save local coordinate system 
+    glPushMatrix(); 
+    //translate our local coordinate system to the point that we want to draw
+    glTranslatef(data[i].x, data[i].y, data[i].z);
+    //draw the cube 
+    filledcube(dim_x*.001); 
+    //go  back to where we were
+     glPopMatrix();
+    */
   }
   
   glEnd(); 
@@ -718,10 +744,86 @@ void draw_points(){
 
 
 
+//draw a square x=[-side,side] x y=[-side,side] at depth z
+void draw_xy_rect(GLfloat z, GLfloat side) {
+  
+  glBegin(GL_POLYGON);
+  glVertex3f(-side,-side, z);
+  glVertex3f(-side,side, z);
+  glVertex3f(side,side, z);
+  glVertex3f(side,-side, z);
+  glEnd();
+}
+
+
+//draw a square y=[-side,side] x z=[-side,side] at given x
+void draw_yz_rect(GLfloat x, GLfloat side) {
+   
+  glBegin(GL_POLYGON);
+  glVertex3f(x,-side, side);
+  glVertex3f(x,side, side);
+  glVertex3f(x,side, -side);
+  glVertex3f(x,-side, -side);
+  glEnd();
+}
+
+
+//draw a square x=[-side,side] x z=[-side,side] at given y
+void draw_xz_rect(GLfloat y, GLfloat side) {
+
+  glBegin(GL_POLYGON);
+  glVertex3f(-side,y, side);
+  glVertex3f(-side,y, -side);
+  glVertex3f(side,y, -side);
+  glVertex3f(side,y, side);
+  glEnd();
+}
+
+
+
+//draw a filled cube [-side,side]^3 at current position 
+void filledcube(GLfloat side) {
+  
+  glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+  
+  /* back, front faces */
+  draw_xy_rect(-side,side);
+  draw_xy_rect(side,side);
+  /* left, right faces*/
+  draw_yz_rect(-side, side);
+  draw_yz_rect(side, side);
+  /* up, down  faces  */
+  draw_xz_rect(side,side);
+  draw_xz_rect(-side,side);
+}
 
 
 
 
+//////////////not needed anymore //////////////////
+
+//draw a cube 
+void cube(GLfloat side) {
+  GLfloat f = side, b = -side;
+ 
+  glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+  
+  /* back face  BLUE*/
+  draw_xy_rect(b,side);
+ /* front face  RED*/
+  draw_xy_rect(f,side);
+  /* side faces  GREEN*/
+  draw_yz_rect(b, side);
+  draw_yz_rect(f, side);
+  //up, down faces missing to be able to see inside 
+
+  /* middle z=0 face CYAN*/
+  draw_xy_rect(0, side);
+  /* middle x=0 face WHITE*/
+  draw_yz_rect(0,side);
+  /* middle y=0 face  pink*/
+  draw_xz_rect(0, side);
+}
 
 /* x is a value in [minx, maxx]; it is mapped to [-1,1] */
 GLfloat xtoscreen(GLfloat x) {
@@ -757,75 +859,6 @@ GLfloat ztoscreen(GLfloat z) {
   // double zscale = 1/(maxz-minz);
   //zscale = zscale/Z_EXAGERRATION;
   return (z-minz)* scale * Z_EXAGERRATION; 
-}
-
-
-
-
-//draw a square x=[-side,side] x y=[-side,side] at depth z
-void draw_xy_rect(GLfloat z, GLfloat side, GLfloat* col) {
-
-  glColor3fv(col);
-  glBegin(GL_POLYGON);
-  glVertex3f(-side,-side, z);
-  glVertex3f(-side,side, z);
-  glVertex3f(side,side, z);
-  glVertex3f(side,-side, z);
-  glEnd();
-}
-
-
-//draw a square y=[-side,side] x z=[-side,side] at given x
-void draw_yz_rect(GLfloat x, GLfloat side, GLfloat* col) {
-  
-  glColor3fv(col);
-  glBegin(GL_POLYGON);
-  glVertex3f(x,-side, side);
-  glVertex3f(x,side, side);
-  glVertex3f(x,side, -side);
-  glVertex3f(x,-side, -side);
-  glEnd();
-}
-
-
-//draw a square x=[-side,side] x z=[-side,side] at given y
-void draw_xz_rect(GLfloat y, GLfloat side, GLfloat* col) {
-
-  glColor3fv(col);
-  glBegin(GL_POLYGON);
-  glVertex3f(-side,y, side);
-  glVertex3f(-side,y, -side);
-  glVertex3f(side,y, -side);
-  glVertex3f(side,y, side);
-  glEnd();
-}
-
-//draw a cube 
-void cube(GLfloat side) {
-  GLfloat f = side, b = -side;
- 
-  if (fillmode) {
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-  } else {
-    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-  }
-
-
-  /* back face  BLUE*/
-  draw_xy_rect(b,side, blue);
- /* front face  RED*/
-  draw_xy_rect(f,side, red);
-  /* side faces  GREEN*/
-  draw_yz_rect(b, side, green);
-  draw_yz_rect(f, side, green);
-  //up, down faces missing to be able to see inside 
-
-  /* middle z=0 face CYAN*/
-  draw_xy_rect(0, side, cyan);
-  /* middle x=0 face WHITE*/
-  draw_yz_rect(0,side, gray);
-  /* middle y=0 face  pink*/
-  draw_xz_rect(0, side, magenta);
 }
 
 
